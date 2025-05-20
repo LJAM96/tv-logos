@@ -15,9 +15,14 @@ LOG_TEXT = "#d4d4d4"
 # Function to parse M3U and extract tvg-name and group-title
 def parse_m3u(m3u_path):
     channels = []
+    m3u_content = []
+    channel_index = -1
+    
     with open(m3u_path, 'r', encoding='utf-8', errors='ignore') as f:
         for line in f:
+            m3u_content.append(line.rstrip())
             if line.startswith('#EXTINF'):
+                channel_index = len(m3u_content) - 1
                 tvg_name = None
                 group_title = None
                 # Extract tvg-name and group-title
@@ -25,8 +30,17 @@ def parse_m3u(m3u_path):
                     tvg_name = line.split('tvg-name="')[1].split('"')[0]
                 if 'group-title="' in line:
                     group_title = line.split('group-title="')[1].split('"')[0]
-                channels.append({'tvg_name': tvg_name, 'group_title': group_title})
-    return channels
+                channels.append({
+                    'tvg_name': tvg_name, 
+                    'group_title': group_title,
+                    'line_index': channel_index
+                })
+            # Store the URL line after #EXTINF
+            elif channel_index >= 0 and not line.startswith('#'):
+                channels[-1]['url'] = line.strip()
+                channel_index = -1
+    
+    return channels, m3u_content
 
 # Function to match channel with logo
 def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
@@ -373,31 +387,34 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
 # Main GUI Application
 class M3UParserApp:
     def __init__(self, root):
+        import tempfile
         self.root = root
         self.root.title('M3U Logo Matcher')
         self.m3u_path = ''
+        self.m3u_url = ''
         self.countries_dir = os.path.join(os.getcwd(), 'countries')
-        
+        self.tempfile_path = None  # For downloaded M3U
+
         # Apply dark theme to the main window
         self.root.configure(bg=DARK_BG)
-        
+
         # Configure styles for ttk widgets
         style = ttk.Style()
         style.theme_use('clam')  # Base theme
-        
+
         # Configure ttk styles for dark mode
         style.configure('TButton', background=DARK_BUTTON, foreground=DARK_TEXT, borderwidth=0)
         style.map('TButton', 
             background=[('active', DARK_ACCENT), ('disabled', '#555555')],
             foreground=[('disabled', '#aaaaaa')])
-            
+
         style.configure('TLabel', background=DARK_BG, foreground=DARK_TEXT)
         style.configure('TFrame', background=DARK_BG)
         style.configure('TProgressbar', 
             background=DARK_ACCENT, 
             troughcolor=DARK_FIELD,
             borderwidth=0)
-        
+
         # URL style variables
         self.url_styles = {
             "Colour": "https://raw.githubusercontent.com/LJAM96/tv-logos/refs/heads/colour/countries",
@@ -406,70 +423,128 @@ class M3UParserApp:
         self.selected_style = tk.StringVar(value="White")  # Default to white
         self.github_base_url = self.url_styles[self.selected_style.get()]
 
+        # Mode: Local file or URL
+        self.input_mode = tk.StringVar(value="file")
+
         # Create a more compact layout
         main_frame = ttk.Frame(root)
         main_frame.pack(fill="both", expand=True, padx=8, pady=8)
-        
-        # Top control panel - all on one row
+
+        # Top control panel with fixed width sections
         control_frame = ttk.Frame(main_frame)
         control_frame.pack(fill="x", pady=5)
         
-        # File selection and process buttons
-        self.select_btn = ttk.Button(control_frame, text='Browse', command=self.browse_m3u)
+        # Left: Input section (radio buttons + URL/file selection)
+        left_outer_frame = ttk.Frame(control_frame)
+        left_outer_frame.pack(side="left", fill="x", expand=True)
+        
+        # Radio button container
+        input_select_frame = ttk.Frame(left_outer_frame)
+        input_select_frame.pack(side="top", anchor="w", fill="x")
+        
+        file_radio = ttk.Radiobutton(input_select_frame, text="Local File", variable=self.input_mode, value="file", command=self.update_input_mode)
+        url_radio = ttk.Radiobutton(input_select_frame, text="URL", variable=self.input_mode, value="url", command=self.update_input_mode)
+        file_radio.pack(side="left", padx=(0,2))
+        url_radio.pack(side="left", padx=(0,2))
+
+        # Input option containers (file or URL)
+        # URL entry frame
+        url_frame = ttk.Frame(left_outer_frame)
+        url_frame.pack(side="top", fill="x", expand=True)
+        self.url_entry = tk.Entry(url_frame, width=32, bg=DARK_FIELD, fg=DARK_TEXT, insertbackground=DARK_TEXT, relief="flat")
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(2,0))
+        self.url_entry.insert(0, "Paste M3U URL here...")
+        self.url_entry.bind("<FocusIn>", lambda e: self.url_entry.delete(0, tk.END) if self.url_entry.get() == "Paste M3U URL here..." else None)
+        self.url_entry.bind("<KeyRelease>", self._on_url_entry_change)
+        url_frame.pack_forget()  # Hide initially
+        self.url_frame = url_frame
+        
+        # File selection frame
+        file_frame = ttk.Frame(left_outer_frame)
+        file_frame.pack(side="top", fill="x")
+        self.select_btn = ttk.Button(file_frame, text='Browse', command=self.browse_m3u)
         self.select_btn.pack(side="left", padx=2)
-        
-        self.file_label = ttk.Label(control_frame, text="No file selected")
-        self.file_label.pack(side="left", padx=5)
-        
-        # Add a style selector dropdown
-        ttk.Label(control_frame, text="Style:").pack(side="left", padx=(10, 2))
-        
-        # Use a regular tk.OptionMenu instead of ttk for better dark mode compatibility
-        # and to make sure dropdown items are visible
-        style_dropdown = tk.OptionMenu(control_frame, self.selected_style, 
+        self.file_label = ttk.Label(file_frame, text="No file selected")
+        self.file_label.pack(side="left", padx=5, fill="x")
+        self.file_frame = file_frame
+
+        # Right: Style selector and process button
+        right_frame = ttk.Frame(control_frame)
+        right_frame.pack(side="right", padx=0, fill="none")  # Fixed width, doesn't expand
+
+        ttk.Label(right_frame, text="Style:").pack(side="left", padx=(10, 2))
+        style_dropdown = tk.OptionMenu(right_frame, self.selected_style, 
                                      *self.url_styles.keys(), 
                                      command=self.update_style)
-        # Style the dropdown to match dark theme
         style_dropdown.configure(bg=DARK_BUTTON, fg=DARK_TEXT, 
                                activebackground=DARK_ACCENT, activeforeground=DARK_TEXT,
                                highlightbackground=DARK_BG, highlightthickness=0,
                                relief="flat", bd=0)
-        # Make sure dropdown menu appears correctly
         style_dropdown["menu"].configure(bg=DARK_FIELD, fg=DARK_TEXT,
                                       activebackground=DARK_ACCENT, activeforeground=DARK_TEXT)
         style_dropdown.pack(side="left")
-        
-        self.process_btn = ttk.Button(control_frame, text='Process', command=self.process, state='disabled')
-        self.process_btn.pack(side="right", padx=5)
-        
+
+        # Output type options
+        self.output_m3u = tk.BooleanVar(value=False)
+        self.m3u_output_check = ttk.Checkbutton(right_frame, text="Update M3U", variable=self.output_m3u)
+        self.m3u_output_check.pack(side="left", padx=5)
+
+        # Help button
+        self.help_btn = ttk.Button(right_frame, text='?', width=2, command=self.show_help)
+        self.help_btn.pack(side="left", padx=2)
+
+        self.process_btn = ttk.Button(right_frame, text='Process', command=self.process, state='disabled')
+        self.process_btn.pack(side="left", padx=5)
+
         # Progress section
         progress_frame = ttk.Frame(main_frame)
         progress_frame.pack(fill="x", pady=5)
-        
+
         self.status_label = ttk.Label(progress_frame, text="Ready")
         self.status_label.pack(side="left", padx=5)
-        
+
         self.progress = ttk.Progressbar(progress_frame, orient="horizontal", mode="determinate")
         self.progress.pack(side="right", fill="x", expand=True, padx=5)
-        
+
         # Log area - more compact
         log_frame = ttk.Frame(main_frame)
         log_frame.pack(fill="both", expand=True, pady=5)
-        
+
         # Configure Text widget colors for dark mode
         self.log_text = Text(log_frame, height=12, width=70, 
                             bg=LOG_BG, fg=LOG_TEXT, 
                             insertbackground=DARK_TEXT,
                             borderwidth=1, relief="solid")
         self.log_text.pack(side="left", fill="both", expand=True)
-        
+
         scrollbar = Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set)
-        
+
         # Match stats at the bottom
         self.stats_label = ttk.Label(main_frame, text="")
         self.stats_label.pack(pady=2, anchor="w")
+
+    def _on_url_entry_change(self, event=None):
+        url = self.url_entry.get().strip()
+        if self.input_mode.get() == "url":
+            if url.startswith('http'):
+                self.process_btn.config(state='normal')
+            else:
+                self.process_btn.config(state='disabled')
+    def update_input_mode(self):
+        """Show/hide widgets depending on input mode (file/url)"""
+        mode = self.input_mode.get()
+        if mode == "file":
+            self.url_frame.pack_forget()
+            self.file_frame.pack(side="top", fill="x")
+            self.process_btn.config(state='normal' if self.m3u_path else 'disabled')
+        else:
+            self.file_frame.pack_forget()
+            self.url_frame.pack(side="top", fill="x", expand=True)
+            self.process_btn.config(state='normal' if self.url_entry.get().startswith('http') else 'disabled')
+
+        self.root.update()
 
     def update_style(self, *args):
         """Update the GitHub base URL when the style changes"""
@@ -509,28 +584,86 @@ class M3UParserApp:
         except:
             return local_path
             
+    def show_help(self):
+        """Show help message explaining the application usage."""
+        help_text = (
+            "TV Logos M3U Matcher Help\n\n"
+            "This application helps you match TV channel logos with entries in your M3U files.\n\n"
+            "Main Features:\n"
+            "• Process local M3U files or download from URLs\n"
+            "• Choose between White or Colour logo styles\n"
+            "• Generate a text file with matched logo URLs\n"
+            "• Optionally update your M3U file with the logo URLs\n\n"
+            "Usage Notes:\n"
+            "1. Select input mode (Local File or URL)\n"
+            "2. Choose logo style (White or Colour)\n"
+            "3. Check 'Update M3U' if you want to modify the M3U file\n"
+            "4. Click 'Process' to begin matching\n\n"
+            "File Save Dialogs:\n"
+            "• The application will ask where to save the output text file\n"
+            "• If 'Update M3U' is checked, it will ask where to save the updated M3U\n"
+            "• You can cancel either save dialog at any time\n"
+            "• If you cancel the text output, the entire process will be stopped\n"
+            "• If you cancel the M3U save, only the text file will be created\n\n"
+            "Note: Closing a save dialog without selecting a file will cancel that output."
+        )
+        messagebox.showinfo('Help', help_text)
+
     def process(self):
+        import tempfile
+        import urllib.request
+        import re
         self.log_text.delete(1.0, tk.END)  # Clear log
-        
+
         if not os.path.exists(self.countries_dir):
             messagebox.showerror('Error', f'Countries folder not found: {self.countries_dir}')
             return
-            
-        self.log(f"Processing M3U file: {os.path.basename(self.m3u_path)}")
+
+        # Determine input mode
+        mode = self.input_mode.get()
+        m3u_path = None
+        temp_file = None
+        if mode == "file":
+            m3u_path = self.m3u_path
+            if not m3u_path or not os.path.exists(m3u_path):
+                messagebox.showerror('Error', 'No M3U file selected.')
+                return
+            self.log(f"Processing M3U file: {os.path.basename(m3u_path)}")
+        else:
+            url = self.url_entry.get().strip()
+            if not url or not url.lower().startswith('http'):
+                messagebox.showerror('Error', 'Please enter a valid M3U URL.')
+                return
+            self.log(f"Downloading M3U from URL: {url}")
+            try:
+                temp_fd, temp_path = tempfile.mkstemp(suffix='.m3u')
+                with os.fdopen(temp_fd, 'wb') as f:
+                    with urllib.request.urlopen(url) as response:
+                        f.write(response.read())
+                m3u_path = temp_path
+                temp_file = temp_path
+                self.log(f"Downloaded to temporary file: {temp_path}")
+            except Exception as e:
+                messagebox.showerror('Error', f'Failed to download M3U: {e}')
+                return
+
         self.log(f"Using {self.selected_style.get()} logos")
-        
+
         # Parse the channels first
-        channels = parse_m3u(self.m3u_path)
+        channels, m3u_content = parse_m3u(m3u_path)
         total_channels = len(channels)
         self.log(f"Found {total_channels} channels in the M3U file")
-        
+
         # Reset progress bar
         self.progress["value"] = 0
         self.progress["maximum"] = total_channels
-        
+
         output_lines = []
         matches = 0
         
+        # Map to store logo URLs by channel index
+        channel_logos = {}
+
         # Process each channel
         for i, ch in enumerate(channels):
             # Update progress
@@ -538,36 +671,158 @@ class M3UParserApp:
             progress_pct = int((i + 1) / total_channels * 100)
             self.status_label.config(text=f"Processing: {progress_pct}% complete")
             self.root.update()
-            
+
             # Process the channel
             self.log(f"\nChannel {i+1}/{total_channels}: '{ch['tvg_name']}'")
             local_logo_path = match_logo(ch['group_title'], ch['tvg_name'], self.countries_dir, self.log)
-            
+
             # Convert local path to GitHub URL
             github_logo_url = self.convert_to_github_url(local_logo_path)
-            
+
             if local_logo_path:
                 matches += 1
-                
+                # Store logo URL for M3U update if needed
+                if 'line_index' in ch:
+                    channel_logos[ch['line_index']] = github_logo_url
+
             output_lines.append(f"group title='{ch['group_title']}' - tvg-name='{ch['tvg_name']}' logo path='{github_logo_url}'")
+
+        # Set suggested default filename based on input source
+        if mode == "file":
+            default_dir = os.path.dirname(m3u_path)
+            default_filename = os.path.splitext(os.path.basename(m3u_path))[0]
+        else:
+            default_dir = os.getcwd()
+            default_filename = "channel_logos"
             
-        # Write output file
-        output_path = os.path.join(os.path.dirname(self.m3u_path), 'output.txt')
+        # Create Save As dialog for the text file output
+        self.root.update()  # Ensure UI is updated before showing dialog
+        output_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialdir=default_dir,
+            initialfile=f"{default_filename}_output.txt",
+            title="Save Logo List As"
+        )
+        
+        # If dialog was cancelled, don't proceed
+        if not output_path:
+            self.log("Text output was cancelled by user")
+            self.status_label.config(text="Ready")
+            self.progress["value"] = 0
+            
+            # Clean up temp file if used
+            if temp_file:
+                try:
+                    os.remove(temp_file)
+                    self.log("Temporary file cleaned up")
+                except Exception:
+                    pass
+                    
+            # Display a more detailed cancellation message
+            messagebox.showinfo('Operation Cancelled', 'Processing was cancelled because you closed the save dialog.')
+            return
+            
+        # Write summary text file
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(output_lines))
+        self.log(f"Output written to: {output_path}")
+        
+        # Write updated M3U file if that option is checked
+        if self.output_m3u.get():
+            # Default M3U name based on the text output name
+            m3u_default_name = os.path.splitext(os.path.basename(output_path))[0].replace("_output", "") + ".m3u"
+            m3u_default_dir = os.path.dirname(output_path)
             
+            # Create Save As dialog for the M3U file
+            self.root.update()  # Ensure UI is updated before showing dialog
+            m3u_output_path = filedialog.asksaveasfilename(
+                defaultextension=".m3u",
+                filetypes=[("M3U files", "*.m3u"), ("All files", "*.*")],
+                initialdir=m3u_default_dir,
+                initialfile=m3u_default_name,
+                title="Save Updated M3U As"
+            )
+            
+            # If M3U dialog was cancelled, don't create M3U file
+            if not m3u_output_path:
+                self.log("M3U output was cancelled by user")
+                self.status_label.config(text="Partial completion: Text output saved, M3U cancelled")
+                output_msg = f"Matched {matches} out of {total_channels} channels.\nText output written to {os.path.basename(output_path)}\nM3U update was cancelled."
+                # Don't show a separate message box here - we'll show the final message at the end
+            else:
+                self.log(f"Creating updated M3U file with logo URLs")
+                
+                # Update the M3U content with new logo URLs
+                for i, line in enumerate(m3u_content):
+                    if i in channel_logos and line.startswith('#EXTINF'):
+                        # Check if line already has a tvg-logo attribute
+                        if 'tvg-logo="' in line:
+                            # Replace existing logo URL
+                            m3u_content[i] = re.sub(r'tvg-logo="[^"]*"', f'tvg-logo="{channel_logos[i]}"', line)
+                        else:
+                            # Add logo URL before the comma
+                            comma_pos = line.rfind(',')
+                            if comma_pos != -1:
+                                m3u_content[i] = line[:comma_pos] + f' tvg-logo="{channel_logos[i]}"' + line[comma_pos:]
+                
+                # Write the updated M3U file
+                with open(m3u_output_path, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(m3u_content))
+                
+                self.log(f"Updated M3U written to: {m3u_output_path}")
+                output_msg = f"Matched {matches} out of {total_channels} channels.\nUpdated M3U written to {os.path.basename(m3u_output_path)}"
+        else:
+            output_msg = f"Matched {matches} out of {total_channels} channels.\nOutput written to {os.path.basename(output_path)}"
+
         # Update final status
         match_percent = int(matches / total_channels * 100) if total_channels > 0 else 0
         self.status_label.config(text=f"Complete: {match_percent}% matches found")
-        self.stats_label.config(text=f"Matched {matches} out of {total_channels} channels. Output written to {os.path.basename(output_path)}")
-        
+        self.stats_label.config(text=f"Matched {matches} out of {total_channels} channels")
+
         self.log(f"\nMatched {matches} out of {total_channels} channels ({match_percent}%)")
-        self.log(f"Output written to {output_path}")
-        messagebox.showinfo('Done', f'Matched {matches} out of {total_channels} channels.\nOutput written to {output_path}')
+        messagebox.showinfo('Done', output_msg)
+
+        # Clean up temp file if used - moved to the end to ensure cleanup in all scenarios
+        if temp_file:
+            try:
+                os.remove(temp_file)
+                self.log("Temporary file cleaned up")
+            except Exception as e:
+                self.log(f"Failed to clean up temporary file: {e}")
+                pass
 
 if __name__ == '__main__':
+    import os.path
+    
+    # Check for first run by looking for config file
+    user_home = os.path.expanduser("~")
+    config_dir = os.path.join(user_home, ".m3u_logo_matcher")
+    first_run_flag = os.path.join(config_dir, "first_run_completed")
+    show_help_at_start = not os.path.exists(first_run_flag)
+    
+    # Create config directory if it doesn't exist
+    if not os.path.exists(config_dir):
+        try:
+            os.makedirs(config_dir)
+        except:
+            pass
+    
     root = tk.Tk()
     app = M3UParserApp(root)
     root.geometry("700x450")
     root.minsize(650, 400)
+    
+    # Show help dialog on first run
+    if show_help_at_start:
+        # Use after to make sure the UI is fully loaded
+        root.after(500, app.show_help)
+        
+        # Create the flag file to mark that first run is complete
+        try:
+            with open(first_run_flag, 'w') as f:
+                f.write("First run completed")
+        except:
+            pass
+    
     root.mainloop()
