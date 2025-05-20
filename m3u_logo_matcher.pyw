@@ -1,6 +1,16 @@
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, Text, Scrollbar, Frame
+from tkinter import filedialog, messagebox, Text, Scrollbar, Frame, ttk
+from tkinter.ttk import Progressbar
+
+# Set dark mode colors
+DARK_BG = "#2d2d2d"
+DARK_TEXT = "#ffffff"
+DARK_BUTTON = "#444444"
+DARK_ACCENT = "#007acc"  # Blue accent color
+DARK_FIELD = "#3d3d3d"
+LOG_BG = "#1e1e1e"
+LOG_TEXT = "#d4d4d4"
 
 # Function to parse M3U and extract tvg-name and group-title
 def parse_m3u(m3u_path):
@@ -24,6 +34,9 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
         if debug_callback:
             debug_callback(f"Missing tvg_name for group_title='{group_title}'")
         return ''
+        
+    # Import regex at the top level
+    import re
         
     # Extract country code from the beginning of group_title
     # Examples: "UK Entertainment", "US Sports", "DE Movies"
@@ -82,6 +95,70 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
         'me': 'world-middle-east'
     }
     
+    # Process tvg_name for matching - we'll need this for all searches
+    def normalize_name(name):
+        # Make lowercase, replace spaces/underscores with hyphens
+        return re.sub(r'[^a-z0-9]', '-', name.strip().lower())
+    
+    # Alternative normalizations for common formats
+    def get_normalized_variations(name):
+        if not name:
+            return []
+            
+        variations = []
+        name_lower = name.lower()
+        
+        # Original normalization
+        norm1 = normalize_name(name)
+        variations.append(norm1)
+        
+        # Special cases for channel numbers in names
+        # Convert "ITV2" to "itv-2" and "4Seven" to "4-seven"
+        number_pattern = re.compile(r'([a-z]+)(\d+)', re.IGNORECASE)
+        match = number_pattern.search(name)
+        if match:
+            channel_name = match.group(1).lower()
+            channel_number = match.group(2)
+            variations.append(f"{channel_name}-{channel_number}")
+        
+        # For names starting with numbers like "4Seven"
+        number_prefix_pattern = re.compile(r'(\d+)([A-Z][a-z]+)')
+        match = number_prefix_pattern.search(name)
+        if match:
+            number = match.group(1)
+            text = match.group(2).lower()
+            variations.append(f"{number}-{text}")
+        
+        # Handle special cases like "Five USA" -> "5usa"
+        if "five" in name_lower or "5" in name_lower:
+            variations.append("5" + re.sub(r'[^a-z0-9]', '', name_lower.replace("five", "")))
+            
+        # Add hyphenated version
+        hyphenated = re.sub(r'(\w)([A-Z])', r'\1-\2', name).lower()
+        if hyphenated != name_lower and hyphenated not in variations:
+            variations.append(hyphenated)
+            
+        # Add fully expanded version
+        expanded = name_lower.replace(" ", "-")
+        if expanded not in variations:
+            variations.append(expanded)
+            
+        # Remove the articles from the name (the, a, an)
+        if name_lower.startswith("the "):
+            variations.append(normalize_name(name_lower[4:]))
+        
+        return variations
+    
+    # Get all normalized variations of the channel name
+    tvg_variations = get_normalized_variations(tvg_name)
+    tvg_norm = tvg_variations[0] if tvg_variations else ""
+    
+    # Break tvg_name into words for partial matching
+    tvg_words = [w for w in re.split(r'[^a-zA-Z0-9]', tvg_name.lower()) if w and len(w) > 1]
+    
+    # Flag to indicate if we should search all country folders
+    search_all = False
+    
     # Build a list of potential country folder names to check
     country_variations = []
     
@@ -93,110 +170,101 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
     
     # 2. Try using the original group_title as a folder name
     if group_title:
-        # Original approach with country name normalization
         norm_country = group_title.strip().lower().replace(' ', '-').replace('_', '-')
         if norm_country not in country_variations:
             country_variations.append(norm_country)
         
         # Add version without special characters
-        import re
         clean_country = re.sub(r'[^a-z0-9]', '-', group_title.lower())
         if clean_country not in country_variations:
             country_variations.append(clean_country)
     
-    # 3. Check all country folders if the above doesn't find anything
-    # This is a fallback strategy
-    all_countries = False
-    if not country_variations:
-        all_countries = True
-        # List all directories in the countries folder
-        try:
-            for folder in [f for f in os.listdir(countries_dir) if os.path.isdir(os.path.join(countries_dir, f))]:
-                country_variations.append(folder)
+    # 3. Always search all folders as a fallback
+    search_all = True
+    all_countries = []
+    try:
+        for folder in [f for f in os.listdir(countries_dir) if os.path.isdir(os.path.join(countries_dir, f))]:
+            all_countries.append(folder)
+        if not country_variations:
             if debug_callback:
-                debug_callback(f"No specific country identified. Will check all {len(country_variations)} country folders")
-        except Exception as e:
-            if debug_callback:
-                debug_callback(f"Error listing country folders: {str(e)}")
+                debug_callback(f"No specific country identified. Will check all {len(all_countries)} country folders")
+    except Exception as e:
+        if debug_callback:
+            debug_callback(f"Error listing country folders: {str(e)}")
     
-    # For each possible country folder name
-    for country_name in country_variations:
-        country_path = os.path.join(countries_dir, country_name)
-        
+    # Function to search for matching logo in a specific country folder
+    def find_logo_in_folder(country_path, country_name):
         if not os.path.isdir(country_path):
-            if debug_callback and not all_countries:  # Don't log this for the all-countries fallback to avoid spam
-                debug_callback(f"Country folder not found: {country_path}")
-            continue
-        
+            return None
+            
         if debug_callback:
             debug_callback(f"Checking country folder: {country_path}")
+            debug_callback(f"Looking for normalized channel variations: {tvg_variations}")
         
-        # Process tvg_name for matching
-        def normalize_name(name):
-            # Make lowercase, replace spaces/underscores with hyphens
-            return re.sub(r'[^a-z0-9]', '-', name.strip().lower())
-        
-        # Clean up the tvg_name
-        tvg_norm = normalize_name(tvg_name)
-        if debug_callback:
-            debug_callback(f"Normalized channel name: '{tvg_norm}'")
-        
-        # Break tvg_name into words for partial matching
-        tvg_words = [w for w in re.split(r'[^a-zA-Z0-9]', tvg_name.lower()) if w]
-        
-        # First try to find an exact match of the full channel name
-        if tvg_words:
-            try:
-                files = os.listdir(country_path)
-                
-                # Sort files by potential relevance (using file name length as a heuristic)
-                # This helps match shorter file names first which are often the main logos
-                files.sort(key=len)
-                
-                # STAGE 1: Try exact full filename match
+        try:
+            files = os.listdir(country_path)
+            # Sort files to prioritize shorter filenames (often main logos)
+            files.sort(key=len)
+            
+            # First try country-specific patterns (e.g., itv-2-uk.png)
+            country_suffix = f"-{country_code}"
+            
+            # STAGE 1: Try exact filename match with any variation
+            for variation in tvg_variations:
                 for fname in files:
                     fname_lower = fname.lower()
-                    base_name = os.path.splitext(fname_lower)[0]  # Remove extension
+                    base_name = os.path.splitext(fname_lower)[0]
                     
-                    # Check if filename exactly matches the normalized tvg_name
-                    if base_name == tvg_norm and any(fname_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.svg']):
+                    # Check different patterns:
+                    # 1. Exact match: "itv-2" == "itv-2"
+                    # 2. With country suffix: "itv-2-uk" 
+                    if (base_name == variation or 
+                        base_name == f"{variation}{country_suffix}" or
+                        variation == base_name.replace(f"{country_suffix}", "")) and \
+                        any(fname_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.svg']):
                         if debug_callback:
-                            debug_callback(f"EXACT MATCH: {fname}")
+                            debug_callback(f"EXACT VARIATION MATCH: {fname} (matched {variation})")
                         return os.path.join(country_path, fname)
-                
-                # STAGE 2: Try if filename starts with the channel name
+            
+            # STAGE 2: Try if filename starts with any variation
+            for variation in tvg_variations:
                 for fname in files:
                     fname_lower = fname.lower()
-                    base_name = os.path.splitext(fname_lower)[0]  # Remove extension
+                    base_name = os.path.splitext(fname_lower)[0]
                     
-                    if base_name.startswith(tvg_norm) and any(fname_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.svg']):
+                    if (base_name.startswith(variation) or variation.startswith(base_name)) and \
+                        any(fname_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.svg']):
                         if debug_callback:
-                            debug_callback(f"PREFIX MATCH: {fname}")
+                            debug_callback(f"PREFIX VARIATION MATCH: {fname} (matched {variation})")
+                        return os.path.join(country_path, fname)
+            
+            # STAGE 3: Try word matching
+            if tvg_words:
+                # Find files where all significant words from tvg_name appear in order
+                for fname in files:
+                    fname_lower = fname.lower()
+                    if not any(fname_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.svg']):
+                        continue
+                        
+                    base_name = os.path.splitext(fname_lower)[0]
+                    
+                    # Check if all words appear in the filename in the right order
+                    all_words_found = True
+                    last_pos = 0
+                    for word in tvg_words:
+                        if len(word) > 1:  # Only consider meaningful words
+                            pos = base_name.find(word, last_pos)
+                            if pos == -1:
+                                all_words_found = False
+                                break
+                            last_pos = pos + len(word)
+                    
+                    if all_words_found:
+                        if debug_callback:
+                            debug_callback(f"WORDS ORDER MATCH: {fname}")
                         return os.path.join(country_path, fname)
                 
-                # STAGE 3: Try if the channel name contains all words from tvg_name in the right order
-                if len(tvg_words) > 1:  # Only if we have multiple words
-                    for fname in files:
-                        fname_lower = fname.lower()
-                        base_name = os.path.splitext(fname_lower)[0]  # Remove extension
-                        
-                        # Check if all words appear in the filename in the right order
-                        all_words_found = True
-                        last_pos = 0
-                        for word in tvg_words:
-                            if word and len(word) > 1:  # Only consider meaningful words
-                                pos = base_name.find(word, last_pos)
-                                if pos == -1:
-                                    all_words_found = False
-                                    break
-                                last_pos = pos + len(word)
-                        
-                        if all_words_found and any(fname_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.svg']):
-                            if debug_callback:
-                                debug_callback(f"WORDS ORDER MATCH: {fname}")
-                            return os.path.join(country_path, fname)
-                
-                # STAGE 4: Calculate similarity scores based on word matching
+                # STAGE 4: Calculate similarity scores
                 best_match = None
                 best_score = 0
                 
@@ -209,15 +277,26 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
                     
                     # Count words from tvg_name that appear in the filename
                     score = 0
-                    for word in tvg_words:
-                        if word and len(word) > 1:  # Only consider meaningful words
-                            if word in base_name:
-                                # Longer words get higher scores
-                                score += len(word)
                     
-                    # Bonus if the first word matches (channel names often start the same)
+                    # Check if any variation appears in the filename
+                    for variation in tvg_variations:
+                        if variation in base_name:
+                            score += len(variation) * 2  # Double points for variation matches
+                            break
+                    
+                    # Count word matches
+                    for word in tvg_words:
+                        if word in base_name:
+                            # Longer words get higher scores
+                            score += len(word)
+                    
+                    # Bonus if first word matches (channel names often start the same)
                     if tvg_words and tvg_words[0] in base_name:
                         score += 5
+                    
+                    # Huge bonus if country code appears in the filename
+                    if country_code and f"-{country_code}" in base_name:
+                        score += 10
                         
                     # Penalize very different lengths
                     length_diff = abs(len(base_name) - len(tvg_norm))
@@ -227,26 +306,65 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
                         best_score = score
                         best_match = fname
                 
-                if best_match and best_score > 5:  # Threshold to avoid poor matches
+                # Consider a match good if score is above threshold
+                if best_match and best_score > 5:
                     if debug_callback:
                         debug_callback(f"BEST MATCH (score {best_score}): {best_match}")
                     return os.path.join(country_path, best_match)
                     
-            except Exception as e:
-                if debug_callback:
-                    debug_callback(f"Error searching files: {str(e)}")
-                
-        # If no match by name, try a default logo
-        try:
+            # Try default logos
             for default_name in [f"{country_name}.png", "flag.png", "logo.png"]:
                 default_path = os.path.join(country_path, default_name)
                 if os.path.exists(default_path):
                     if debug_callback:
                         debug_callback(f"Using default logo: {default_name}")
                     return default_path
+                    
         except Exception as e:
             if debug_callback:
-                debug_callback(f"Error checking default logos: {str(e)}")
+                debug_callback(f"Error searching in {country_path}: {str(e)}")
+                
+        return None
+    
+    # First search in the most likely country folders
+    for country_name in country_variations:
+        country_path = os.path.join(countries_dir, country_name)
+        result = find_logo_in_folder(country_path, country_name)
+        if result:
+            return result
+    
+    # If no match or told to search all, try all country folders
+    if search_all:
+        if debug_callback:
+            debug_callback("Searching all country folders as fallback...")
+            
+        # Try specific countries first based on common patterns in the tvg_name
+        priority_countries = []
+        
+        # Look for country hints in the channel name
+        for suffix in ['-uk', '-us', '-ca', '-au', '-jp', '-de', '-fr', '-it', '-es']:
+            if any(variation.endswith(suffix) for variation in tvg_variations):
+                country_code_hint = suffix[1:]  # Remove the '-'
+                if country_code_hint in country_map:
+                    priority_countries.append(country_map[country_code_hint])
+                    if debug_callback:
+                        debug_callback(f"Found country hint in channel name: {suffix} -> {country_map[country_code_hint]}")
+        
+        # Try priority countries first
+        for country_name in priority_countries:
+            if country_name not in country_variations:  # Skip if already searched
+                country_path = os.path.join(countries_dir, country_name)
+                result = find_logo_in_folder(country_path, country_name)
+                if result:
+                    return result
+        
+        # Last resort - try ALL countries
+        for country_name in all_countries:
+            if country_name not in country_variations and country_name not in priority_countries:
+                country_path = os.path.join(countries_dir, country_name)
+                result = find_logo_in_folder(country_path, country_name)
+                if result:
+                    return result
     
     if debug_callback:
         debug_callback(f"No logo found for '{tvg_name}' in any country folder")
@@ -256,45 +374,108 @@ def match_logo(group_title, tvg_name, countries_dir, debug_callback=None):
 class M3UParserApp:
     def __init__(self, root):
         self.root = root
-        self.root.title('M3U Channel Logo Matcher')
+        self.root.title('M3U Logo Matcher')
         self.m3u_path = ''
         self.countries_dir = os.path.join(os.getcwd(), 'countries')
-        self.github_base_url = "https://raw.githubusercontent.com/LJAM96/tv-logos/refs/heads/white/countries"
+        
+        # Apply dark theme to the main window
+        self.root.configure(bg=DARK_BG)
+        
+        # Configure styles for ttk widgets
+        style = ttk.Style()
+        style.theme_use('clam')  # Base theme
+        
+        # Configure ttk styles for dark mode
+        style.configure('TButton', background=DARK_BUTTON, foreground=DARK_TEXT, borderwidth=0)
+        style.map('TButton', 
+            background=[('active', DARK_ACCENT), ('disabled', '#555555')],
+            foreground=[('disabled', '#aaaaaa')])
+            
+        style.configure('TLabel', background=DARK_BG, foreground=DARK_TEXT)
+        style.configure('TFrame', background=DARK_BG)
+        style.configure('TProgressbar', 
+            background=DARK_ACCENT, 
+            troughcolor=DARK_FIELD,
+            borderwidth=0)
+        
+        # URL style variables
+        self.url_styles = {
+            "Colour": "https://raw.githubusercontent.com/LJAM96/tv-logos/refs/heads/colour/countries",
+            "White": "https://raw.githubusercontent.com/LJAM96/tv-logos/refs/heads/white/countries"
+        }
+        self.selected_style = tk.StringVar(value="White")  # Default to white
+        self.github_base_url = self.url_styles[self.selected_style.get()]
 
-        # Add frame for better layout
-        main_frame = Frame(root)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        # Create a more compact layout
+        main_frame = ttk.Frame(root)
+        main_frame.pack(fill="both", expand=True, padx=8, pady=8)
         
-        self.label = tk.Label(main_frame, text='Select M3U file:')
-        self.label.pack(pady=5, anchor="w")
+        # Top control panel - all on one row
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(fill="x", pady=5)
         
-        # Add a frame for buttons
-        btn_frame = Frame(main_frame)
-        btn_frame.pack(fill="x", pady=5)
+        # File selection and process buttons
+        self.select_btn = ttk.Button(control_frame, text='Browse', command=self.browse_m3u)
+        self.select_btn.pack(side="left", padx=2)
         
-        self.select_btn = tk.Button(btn_frame, text='Browse M3U', command=self.browse_m3u)
-        self.select_btn.pack(side="left", padx=5)
+        self.file_label = ttk.Label(control_frame, text="No file selected")
+        self.file_label.pack(side="left", padx=5)
         
-        self.process_btn = tk.Button(btn_frame, text='Process', command=self.process, state='disabled')
-        self.process_btn.pack(side="left", padx=5)
+        # Add a style selector dropdown
+        ttk.Label(control_frame, text="Style:").pack(side="left", padx=(10, 2))
         
-        # Add a debug log text area
-        log_frame = Frame(main_frame)
-        log_frame.pack(fill="both", expand=True, pady=10)
+        # Use a regular tk.OptionMenu instead of ttk for better dark mode compatibility
+        # and to make sure dropdown items are visible
+        style_dropdown = tk.OptionMenu(control_frame, self.selected_style, 
+                                     *self.url_styles.keys(), 
+                                     command=self.update_style)
+        # Style the dropdown to match dark theme
+        style_dropdown.configure(bg=DARK_BUTTON, fg=DARK_TEXT, 
+                               activebackground=DARK_ACCENT, activeforeground=DARK_TEXT,
+                               highlightbackground=DARK_BG, highlightthickness=0,
+                               relief="flat", bd=0)
+        # Make sure dropdown menu appears correctly
+        style_dropdown["menu"].configure(bg=DARK_FIELD, fg=DARK_TEXT,
+                                      activebackground=DARK_ACCENT, activeforeground=DARK_TEXT)
+        style_dropdown.pack(side="left")
         
-        log_label = tk.Label(log_frame, text="Debug Log:")
-        log_label.pack(anchor="w")
+        self.process_btn = ttk.Button(control_frame, text='Process', command=self.process, state='disabled')
+        self.process_btn.pack(side="right", padx=5)
         
-        self.log_text = Text(log_frame, height=15, width=80)
+        # Progress section
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.pack(fill="x", pady=5)
+        
+        self.status_label = ttk.Label(progress_frame, text="Ready")
+        self.status_label.pack(side="left", padx=5)
+        
+        self.progress = ttk.Progressbar(progress_frame, orient="horizontal", mode="determinate")
+        self.progress.pack(side="right", fill="x", expand=True, padx=5)
+        
+        # Log area - more compact
+        log_frame = ttk.Frame(main_frame)
+        log_frame.pack(fill="both", expand=True, pady=5)
+        
+        # Configure Text widget colors for dark mode
+        self.log_text = Text(log_frame, height=12, width=70, 
+                            bg=LOG_BG, fg=LOG_TEXT, 
+                            insertbackground=DARK_TEXT,
+                            borderwidth=1, relief="solid")
         self.log_text.pack(side="left", fill="both", expand=True)
         
         scrollbar = Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set)
         
-        # Status label
-        self.status_label = tk.Label(main_frame, text="Ready")
-        self.status_label.pack(pady=5, anchor="w")
+        # Match stats at the bottom
+        self.stats_label = ttk.Label(main_frame, text="")
+        self.stats_label.pack(pady=2, anchor="w")
+
+    def update_style(self, *args):
+        """Update the GitHub base URL when the style changes"""
+        selected = self.selected_style.get()
+        self.github_base_url = self.url_styles[selected]
+        self.log(f"Logo style changed to: {selected}")
 
     def log(self, message):
         self.log_text.insert(tk.END, f"{message}\n")
@@ -305,8 +486,9 @@ class M3UParserApp:
         path = filedialog.askopenfilename(filetypes=[('M3U files', '*.m3u'), ('All files', '*.*')])
         if path:
             self.m3u_path = path
-            self.log(f"Selected M3U file: {path}")
-            self.status_label.config(text=f"M3U: {os.path.basename(path)}")
+            filename = os.path.basename(path)
+            self.log(f"Selected: {filename}")
+            self.file_label.config(text=filename)
             self.process_btn.config(state='normal')
     
     def convert_to_github_url(self, local_path):
@@ -334,17 +516,31 @@ class M3UParserApp:
             messagebox.showerror('Error', f'Countries folder not found: {self.countries_dir}')
             return
             
-        self.log(f"Processing M3U file: {self.m3u_path}")
-        self.log(f"Looking for logos in: {self.countries_dir}")
+        self.log(f"Processing M3U file: {os.path.basename(self.m3u_path)}")
+        self.log(f"Using {self.selected_style.get()} logos")
         
+        # Parse the channels first
         channels = parse_m3u(self.m3u_path)
-        self.log(f"Found {len(channels)} channels in the M3U file")
+        total_channels = len(channels)
+        self.log(f"Found {total_channels} channels in the M3U file")
+        
+        # Reset progress bar
+        self.progress["value"] = 0
+        self.progress["maximum"] = total_channels
         
         output_lines = []
         matches = 0
         
-        for ch in channels:
-            self.log(f"\nProcessing: group_title='{ch['group_title']}', tvg_name='{ch['tvg_name']}'")
+        # Process each channel
+        for i, ch in enumerate(channels):
+            # Update progress
+            self.progress["value"] = i + 1
+            progress_pct = int((i + 1) / total_channels * 100)
+            self.status_label.config(text=f"Processing: {progress_pct}% complete")
+            self.root.update()
+            
+            # Process the channel
+            self.log(f"\nChannel {i+1}/{total_channels}: '{ch['tvg_name']}'")
             local_logo_path = match_logo(ch['group_title'], ch['tvg_name'], self.countries_dir, self.log)
             
             # Convert local path to GitHub URL
@@ -355,16 +551,23 @@ class M3UParserApp:
                 
             output_lines.append(f"group title='{ch['group_title']}' - tvg-name='{ch['tvg_name']}' logo path='{github_logo_url}'")
             
+        # Write output file
         output_path = os.path.join(os.path.dirname(self.m3u_path), 'output.txt')
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(output_lines))
             
-        self.log(f"\nMatched {matches} out of {len(channels)} channels")
+        # Update final status
+        match_percent = int(matches / total_channels * 100) if total_channels > 0 else 0
+        self.status_label.config(text=f"Complete: {match_percent}% matches found")
+        self.stats_label.config(text=f"Matched {matches} out of {total_channels} channels. Output written to {os.path.basename(output_path)}")
+        
+        self.log(f"\nMatched {matches} out of {total_channels} channels ({match_percent}%)")
         self.log(f"Output written to {output_path}")
-        messagebox.showinfo('Done', f'Matched {matches} out of {len(channels)} channels.\nOutput written to {output_path}')
+        messagebox.showinfo('Done', f'Matched {matches} out of {total_channels} channels.\nOutput written to {output_path}')
 
 if __name__ == '__main__':
     root = tk.Tk()
     app = M3UParserApp(root)
-    root.geometry("800x600")
+    root.geometry("700x450")
+    root.minsize(650, 400)
     root.mainloop()
