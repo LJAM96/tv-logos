@@ -259,7 +259,7 @@ class M3UParserApp:
         self.root.title('M3U Channel Logo Matcher')
         self.m3u_path = ''
         self.countries_dir = os.path.join(os.getcwd(), 'countries')
-        self.github_base_url = "https://raw.githubusercontent.com/LJAM96/tv-logos/refs/heads/colour/countries"
+        self.github_base_url = "https://raw.githubusercontent.com/LJAM96/tv-logos/refs/heads/white/countries"
 
         # Add frame for better layout
         main_frame = Frame(root)
