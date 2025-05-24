@@ -426,6 +426,11 @@ class M3UParserApp:
         # Mode: Local file or URL
         self.input_mode = tk.StringVar(value="file")
 
+        # Output formats: txt, html, m3u (multi-select)
+        self.output_format_txt = tk.BooleanVar(value=True)
+        self.output_format_html = tk.BooleanVar(value=False)
+        self.output_format_m3u = tk.BooleanVar(value=False)
+
         # Create a more compact layout
         main_frame = ttk.Frame(root)
         main_frame.pack(fill="both", expand=True, padx=8, pady=8)
@@ -434,39 +439,49 @@ class M3UParserApp:
         control_frame = ttk.Frame(main_frame)
         control_frame.pack(fill="x", pady=5)
         
-        # Left: Input section (radio buttons + URL/file selection)
+
+        # Left: Input section (radio buttons + file/url selection + output formats)
         left_outer_frame = ttk.Frame(control_frame)
         left_outer_frame.pack(side="left", fill="x", expand=True)
-        
-        # Radio button container
+
+        # Radio button container (row 0)
         input_select_frame = ttk.Frame(left_outer_frame)
-        input_select_frame.pack(side="top", anchor="w", fill="x")
-        
+        input_select_frame.grid(row=0, column=0, sticky="w", pady=(0, 2))
         file_radio = ttk.Radiobutton(input_select_frame, text="Local File", variable=self.input_mode, value="file", command=self.update_input_mode)
         url_radio = ttk.Radiobutton(input_select_frame, text="URL", variable=self.input_mode, value="url", command=self.update_input_mode)
         file_radio.pack(side="left", padx=(0,2))
         url_radio.pack(side="left", padx=(0,2))
 
-        # Input option containers (file or URL)
-        # URL entry frame
-        url_frame = ttk.Frame(left_outer_frame)
-        url_frame.pack(side="top", fill="x", expand=True)
-        self.url_entry = tk.Entry(url_frame, width=32, bg=DARK_FIELD, fg=DARK_TEXT, insertbackground=DARK_TEXT, relief="flat")
-        self.url_entry.pack(side="left", fill="x", expand=True, padx=(2,0))
-        self.url_entry.insert(0, "Paste M3U URL here...")
-        self.url_entry.bind("<FocusIn>", lambda e: self.url_entry.delete(0, tk.END) if self.url_entry.get() == "Paste M3U URL here..." else None)
-        self.url_entry.bind("<KeyRelease>", self._on_url_entry_change)
-        url_frame.pack_forget()  # Hide initially
-        self.url_frame = url_frame
-        
-        # File selection frame
+        # File selection frame (row 1)
         file_frame = ttk.Frame(left_outer_frame)
-        file_frame.pack(side="top", fill="x")
+        file_frame.grid(row=1, column=0, sticky="ew", pady=(0, 2))
         self.select_btn = ttk.Button(file_frame, text='Browse', command=self.browse_m3u)
         self.select_btn.pack(side="left", padx=2)
         self.file_label = ttk.Label(file_frame, text="No file selected")
         self.file_label.pack(side="left", padx=5, fill="x")
         self.file_frame = file_frame
+
+        # URL entry frame (row 2)
+        url_frame = ttk.Frame(left_outer_frame)
+        url_frame.grid(row=2, column=0, sticky="ew", pady=(0, 2))
+        self.url_entry = tk.Entry(url_frame, width=32, bg=DARK_FIELD, fg=DARK_TEXT, insertbackground=DARK_TEXT, relief="flat")
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(2,0))
+        self.url_entry.insert(0, "Paste M3U URL here...")
+        self.url_entry.bind("<FocusIn>", lambda e: self.url_entry.delete(0, tk.END) if self.url_entry.get() == "Paste M3U URL here..." else None)
+        self.url_entry.bind("<KeyRelease>", self._on_url_entry_change)
+        url_frame.grid_remove()  # Hide initially
+        self.url_frame = url_frame
+
+        # Output format selector (row 3, visually separated)
+        output_format_frame = tk.LabelFrame(left_outer_frame, text="Output Formats", bg=DARK_BG, fg=DARK_TEXT, highlightbackground=DARK_FIELD, highlightcolor=DARK_FIELD)
+        output_format_frame.grid(row=3, column=0, sticky="ew", pady=(4,0), padx=(0,0))
+        # Style checkbuttons for dark mode
+        self.format_txt_check = tk.Checkbutton(output_format_frame, text="Text", variable=self.output_format_txt, bg=DARK_BG, fg=DARK_TEXT, selectcolor=DARK_FIELD, activebackground=DARK_FIELD, activeforeground=DARK_TEXT)
+        self.format_html_check = tk.Checkbutton(output_format_frame, text="HTML", variable=self.output_format_html, bg=DARK_BG, fg=DARK_TEXT, selectcolor=DARK_FIELD, activebackground=DARK_FIELD, activeforeground=DARK_TEXT)
+        self.format_m3u_check = tk.Checkbutton(output_format_frame, text="M3U", variable=self.output_format_m3u, bg=DARK_BG, fg=DARK_TEXT, selectcolor=DARK_FIELD, activebackground=DARK_FIELD, activeforeground=DARK_TEXT)
+        self.format_txt_check.pack(side="left", padx=(2, 2), pady=2)
+        self.format_html_check.pack(side="left", padx=(2, 2), pady=2)
+        self.format_m3u_check.pack(side="left", padx=(2, 2), pady=2)
 
         # Right: Style selector and process button
         right_frame = ttk.Frame(control_frame)
@@ -484,10 +499,7 @@ class M3UParserApp:
                                       activebackground=DARK_ACCENT, activeforeground=DARK_TEXT)
         style_dropdown.pack(side="left")
 
-        # Output type options
-        self.output_m3u = tk.BooleanVar(value=False)
-        self.m3u_output_check = ttk.Checkbutton(right_frame, text="Update M3U", variable=self.output_m3u)
-        self.m3u_output_check.pack(side="left", padx=5)
+        # Remove old M3U output option (now in output formats)
 
         # Help button
         self.help_btn = ttk.Button(right_frame, text='?', width=2, command=self.show_help)
@@ -536,12 +548,12 @@ class M3UParserApp:
         """Show/hide widgets depending on input mode (file/url)"""
         mode = self.input_mode.get()
         if mode == "file":
-            self.url_frame.pack_forget()
-            self.file_frame.pack(side="top", fill="x")
+            self.url_frame.grid_remove()
+            self.file_frame.grid()
             self.process_btn.config(state='normal' if self.m3u_path else 'disabled')
         else:
-            self.file_frame.pack_forget()
-            self.url_frame.pack(side="top", fill="x", expand=True)
+            self.file_frame.grid_remove()
+            self.url_frame.grid()
             self.process_btn.config(state='normal' if self.url_entry.get().startswith('http') else 'disabled')
 
         self.root.update()
@@ -592,22 +604,348 @@ class M3UParserApp:
             "Main Features:\n"
             "• Process local M3U files or download from URLs\n"
             "• Choose between White or Colour logo styles\n"
-            "• Generate a text file with matched logo URLs\n"
+            "• Generate output in text or HTML format with matched logo URLs\n"
+            "• Interactive HTML output with expandable categories\n"
             "• Optionally update your M3U file with the logo URLs\n\n"
             "Usage Notes:\n"
             "1. Select input mode (Local File or URL)\n"
             "2. Choose logo style (White or Colour)\n"
             "3. Check 'Update M3U' if you want to modify the M3U file\n"
-            "4. Click 'Process' to begin matching\n\n"
+            "4. Click 'Process' to begin matching\n"
+            "5. Choose save locations for output files (at the beginning)\n"
+            "6. For HTML output, just save with a .html extension\n\n"
+            "HTML Output:\n"
+            "• Channels are grouped by category with expandable sections\n"
+            "• Shows logo previews for each channel\n"
+            "• Includes 'Copy URL' button for easy copying\n"
+            "• Shows match statistics for each category\n\n"
             "File Save Dialogs:\n"
-            "• The application will ask where to save the output text file\n"
-            "• If 'Update M3U' is checked, it will ask where to save the updated M3U\n"
+            "• Save dialogs appear at the START of processing\n"
+            "• Choose .txt for simple text output or .html for interactive output\n"
+            "• If 'Update M3U' is checked, you'll be asked where to save it\n"
             "• You can cancel either save dialog at any time\n"
-            "• If you cancel the text output, the entire process will be stopped\n"
-            "• If you cancel the M3U save, only the text file will be created\n\n"
+            "• If you cancel the main output, the entire process will be stopped\n"
+            "• If you cancel the M3U save, only the main output will be created\n\n"
             "Note: Closing a save dialog without selecting a file will cancel that output."
         )
         messagebox.showinfo('Help', help_text)
+
+    def write_html_output(self, output_path, structured_data, matches, total_channels):
+        """Generate an HTML output file with expandable categories and image previews"""
+        html_template = """<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"UTF-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+    <title>M3U Logo Matcher Results</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #2d2d2d;
+            color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            background-color: #007acc;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .summary {
+            background-color: #3d3d3d;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .category {
+            background-color: #3d3d3d;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .category-header {
+            background-color: #444444;
+            padding: 10px 15px;
+            border-radius: 5px 5px 0 0;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+        .category-header .expand-icon {
+            margin-left: 10px;
+            font-size: 18px;
+            transition: transform 0.3s;
+        }
+        .category-content {
+            padding: 0;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            display: block;
+        }
+        .category-content.expanded {
+            padding: 15px;
+            max-height: 10000px;
+            transition: max-height 0.5s ease;
+        }
+        .category-content:not(.expanded) {
+            max-height: 0;
+            padding: 0;
+        }
+        .channel-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            grid-gap: 15px;
+        }
+        .channel-card {
+            background-color: #232323;
+            border-radius: 5px;
+            padding: 10px 10px 15px 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            transition: box-shadow 0.2s;
+        }
+        .channel-card:hover {
+            box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+        }
+        .logo-container {
+            width: 120px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 8px;
+            background: #181818;
+            border-radius: 4px;
+        }
+        .logo-container img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .channel-name {
+            font-weight: bold;
+            margin-bottom: 8px;
+            text-align: center;
+            min-height: 32px;
+            display: flex;
+            align-items: center;
+            color: #fff;
+            font-size: 15px;
+        }
+        .copy-button {
+            background-color: #007acc;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            padding: 4px 10px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin-top: 3px;
+            font-size: 13px;
+        }
+        .copy-button:active, .copy-button:focus {
+            outline: none;
+            background-color: #005999;
+        }
+        .copy-button:hover {
+            background-color: #005999;
+        }
+        .match-count {
+            font-weight: normal;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        .no-logo {
+            color: #ff6b6b;
+            font-style: italic;
+            font-size: 12px;
+        }
+        footer {
+            margin-top: 30px;
+            text-align: center;
+            color: #aaaaaa;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container"> 
+        <header>
+            <h1>M3U Logo Matcher Results</h1>
+        </header>
+        
+        <div class="summary">
+            <p>Matched <strong>{{matches}}</strong> out of <strong>{{total_channels}}</strong> channels ({{match_percent}}%).</p>
+            <p>Generated on {{date_time}}</p>
+        </div>
+        
+        {{categories_html}}
+        
+        <footer>
+            <p>Generated by TV Logos M3U Matcher</p>
+        </footer>
+    </div>
+
+    <script>
+        // Function to toggle category expansion
+        function toggleCategory(element) {
+            const content = element.nextElementSibling;
+            const icon = element.querySelector('.expand-icon');
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                icon.textContent = '▼';
+            } else {
+                content.classList.add('expanded');
+                icon.textContent = '▲';
+            }
+        }
+
+        // Function to copy logo URL to clipboard
+        function copyLogoUrl(event, url) {
+            event.stopPropagation();
+            const button = event.target;
+            const originalText = button.textContent;
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(url).then(() => {
+                    button.textContent = 'Copied!';
+                    setTimeout(() => {
+                        button.textContent = originalText;
+                    }, 1500);
+                }, () => fallbackCopyTextToClipboard(url, button, originalText));
+            } else {
+                fallbackCopyTextToClipboard(url, button, originalText);
+            }
+        }
+
+        function fallbackCopyTextToClipboard(text, button, originalText) {
+            let textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.top = 0;
+            textArea.style.left = 0;
+            textArea.style.width = '2em';
+            textArea.style.height = '2em';
+            textArea.style.padding = 0;
+            textArea.style.border = 'none';
+            textArea.style.outline = 'none';
+            textArea.style.boxShadow = 'none';
+            textArea.style.background = 'transparent';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                }, 1500);
+            } catch (err) {
+                button.textContent = 'Failed!';
+                setTimeout(() => {
+                    button.textContent = originalText;
+                }, 1500);
+            }
+            document.body.removeChild(textArea);
+        }
+
+        // Expand the first category by default
+        document.addEventListener('DOMContentLoaded', function() {
+            const firstCategory = document.querySelector('.category-header');
+            if (firstCategory) {
+                toggleCategory(firstCategory);
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+
+        # Format the datetime
+        import datetime
+        now = datetime.datetime.now()
+        date_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Calculate match percentage
+        match_percent = int(matches / total_channels * 100) if total_channels > 0 else 0
+        
+        # Generate HTML for each category
+        categories_html = []
+        
+        # Sort categories alphabetically
+        sorted_categories = sorted(structured_data.keys())
+        
+        for category in sorted_categories:
+            channels = structured_data[category]
+            # Count matches in this category
+            category_matches = sum(1 for ch in channels if ch['has_logo'])
+            
+            # Generate channel cards for this category
+            channel_cards = []
+            for channel in channels:
+                # Fix logo URL: ensure no double slashes and always use https
+                logo_url = channel["logo_url"].replace('\\', '/').replace('http:/', 'http://').replace('https:/', 'https://')
+                while '//' in logo_url[8:]:
+                    logo_url = logo_url[:8] + logo_url[8:].replace('//', '/')
+                logo_html = f'<img src="{logo_url}" alt="{channel["name"]} logo">' if channel['has_logo'] else '<span class="no-logo">No logo found</span>'
+                
+                # Build the copy button separately
+                copy_button = ''
+                if channel['has_logo']:
+                    # Use single quotes for JS argument to avoid escaping issues
+                    escaped_url = channel["logo_url"].replace("'", "&#39;")
+                    copy_button = f"<button class='copy-button' onclick=\"copyLogoUrl(event, '{escaped_url}')\">Copy URL</button>"
+
+                card_html = f"""
+                <div class="channel-card">
+                    <div class="logo-container">
+                        {logo_html}
+                    </div>
+                    <div class="channel-name">{channel["name"]}</div>
+                    {copy_button}
+                </div>
+                """
+                channel_cards.append(card_html)
+            
+            # Create the category section
+            category_html = f"""
+            <div class="category">
+                <div class="category-header" onclick="toggleCategory(this)">
+                    <span>{category} <span class="match-count">({category_matches}/{len(channels)} matched)</span></span>
+                    <span class="expand-icon">▼</span>
+                </div>
+                <div class="category-content">
+                    <div class="channel-grid">
+                        {"".join(channel_cards)}
+                    </div>
+                </div>
+            </div>
+            """
+            categories_html.append(category_html)
+        
+        # Combine all categories
+        # Use str.replace to substitute the placeholders after escaping curly braces
+        final_html = html_template.replace("{{matches}}", str(matches)) \
+            .replace("{{total_channels}}", str(total_channels)) \
+            .replace("{{match_percent}}", str(match_percent)) \
+            .replace("{{date_time}}", date_time) \
+            .replace("{{categories_html}}", "\n".join(categories_html))
+        
+        # Write the HTML file
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(final_html)
 
     def process(self):
         import tempfile
@@ -623,6 +961,62 @@ class M3UParserApp:
         mode = self.input_mode.get()
         m3u_path = None
         temp_file = None
+
+        # Gather selected output formats
+        selected_formats = []
+        if self.output_format_txt.get():
+            selected_formats.append("txt")
+        if self.output_format_html.get():
+            selected_formats.append("html")
+        if self.output_format_m3u.get():
+            selected_formats.append("m3u")
+
+        if not selected_formats:
+            messagebox.showerror('Error', 'Please select at least one output format.')
+            return
+
+        # Prompt for output file(s) at the start
+        output_paths = {}
+        if mode == "file":
+            default_dir = os.path.dirname(self.m3u_path) if self.m3u_path else os.getcwd()
+            default_filename = os.path.splitext(os.path.basename(self.m3u_path))[0] if self.m3u_path else "channel_logos"
+        else:
+            default_dir = os.getcwd()
+            default_filename = "channel_logos"
+
+        # Prompt for each selected output type
+        for fmt in selected_formats:
+            if fmt == "txt":
+                ext = ".txt"
+                filetypes = [("Text files", "*.txt"), ("All files", "*.*")]
+            elif fmt == "html":
+                ext = ".html"
+                filetypes = [("HTML files", "*.html"), ("All files", "*.*")]
+            elif fmt == "m3u":
+                ext = ".m3u"
+                filetypes = [("M3U files", "*.m3u"), ("All files", "*.*")]
+            else:
+                continue
+            self.root.update()
+            output_path = filedialog.asksaveasfilename(
+                defaultextension=ext,
+                filetypes=filetypes,
+                initialdir=default_dir,
+                initialfile=f"{default_filename}_output{ext}" if fmt != "m3u" else f"{default_filename}{ext}",
+                title=f"Save {fmt.upper()} Output As"
+            )
+            if not output_path:
+                self.log(f"{fmt.upper()} output was cancelled by user")
+                if fmt == "txt" or fmt == "html":
+                    self.status_label.config(text="Ready")
+                    self.progress["value"] = 0
+                    messagebox.showinfo('Operation Cancelled', f'Processing was cancelled because you closed the {fmt.upper()} save dialog.')
+                    return
+                else:
+                    continue
+            output_paths[fmt] = output_path
+
+        # Now fetch and parse the M3U file
         if mode == "file":
             m3u_path = self.m3u_path
             if not m3u_path or not os.path.exists(m3u_path):
@@ -660,120 +1054,77 @@ class M3UParserApp:
 
         output_lines = []
         matches = 0
-        
-        # Map to store logo URLs by channel index
         channel_logos = {}
+        structured_data = {}
 
         # Process each channel
         for i, ch in enumerate(channels):
-            # Update progress
             self.progress["value"] = i + 1
             progress_pct = int((i + 1) / total_channels * 100)
             self.status_label.config(text=f"Processing: {progress_pct}% complete")
             self.root.update()
 
-            # Process the channel
             self.log(f"\nChannel {i+1}/{total_channels}: '{ch['tvg_name']}'")
             local_logo_path = match_logo(ch['group_title'], ch['tvg_name'], self.countries_dir, self.log)
-
-            # Convert local path to GitHub URL
             github_logo_url = self.convert_to_github_url(local_logo_path)
-
             if local_logo_path:
                 matches += 1
-                # Store logo URL for M3U update if needed
                 if 'line_index' in ch:
                     channel_logos[ch['line_index']] = github_logo_url
-
             output_lines.append(f"group title='{ch['group_title']}' - tvg-name='{ch['tvg_name']}' logo path='{github_logo_url}'")
+            if 'group_title' not in ch:
+                ch['group_title'] = 'Uncategorized'
+            if ch['group_title'] not in structured_data:
+                structured_data[ch['group_title']] = []
+            structured_data[ch['group_title']].append({
+                'name': ch['tvg_name'] or 'Unknown',
+                'logo_url': github_logo_url,
+                'has_logo': bool(local_logo_path)
+            })
 
-        # Set suggested default filename based on input source
-        if mode == "file":
-            default_dir = os.path.dirname(m3u_path)
-            default_filename = os.path.splitext(os.path.basename(m3u_path))[0]
-        else:
-            default_dir = os.getcwd()
-            default_filename = "channel_logos"
-            
-        # Create Save As dialog for the text file output
-        self.root.update()  # Ensure UI is updated before showing dialog
-        output_path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-            initialdir=default_dir,
-            initialfile=f"{default_filename}_output.txt",
-            title="Save Logo List As"
-        )
-        
-        # If dialog was cancelled, don't proceed
-        if not output_path:
-            self.log("Text output was cancelled by user")
-            self.status_label.config(text="Ready")
-            self.progress["value"] = 0
-            
-            # Clean up temp file if used
-            if temp_file:
-                try:
-                    os.remove(temp_file)
-                    self.log("Temporary file cleaned up")
-                except Exception:
-                    pass
-                    
-            # Display a more detailed cancellation message
-            messagebox.showinfo('Operation Cancelled', 'Processing was cancelled because you closed the save dialog.')
-            return
-            
-        # Write summary text file
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(output_lines))
-        self.log(f"Output written to: {output_path}")
-        
-        # Write updated M3U file if that option is checked
-        if self.output_m3u.get():
-            # Default M3U name based on the text output name
-            m3u_default_name = os.path.splitext(os.path.basename(output_path))[0].replace("_output", "") + ".m3u"
-            m3u_default_dir = os.path.dirname(output_path)
-            
-            # Create Save As dialog for the M3U file
-            self.root.update()  # Ensure UI is updated before showing dialog
-            m3u_output_path = filedialog.asksaveasfilename(
-                defaultextension=".m3u",
-                filetypes=[("M3U files", "*.m3u"), ("All files", "*.*")],
-                initialdir=m3u_default_dir,
-                initialfile=m3u_default_name,
-                title="Save Updated M3U As"
-            )
-            
-            # If M3U dialog was cancelled, don't create M3U file
-            if not m3u_output_path:
-                self.log("M3U output was cancelled by user")
-                self.status_label.config(text="Partial completion: Text output saved, M3U cancelled")
-                output_msg = f"Matched {matches} out of {total_channels} channels.\nText output written to {os.path.basename(output_path)}\nM3U update was cancelled."
-                # Don't show a separate message box here - we'll show the final message at the end
-            else:
-                self.log(f"Creating updated M3U file with logo URLs")
-                
-                # Update the M3U content with new logo URLs
-                for i, line in enumerate(m3u_content):
-                    if i in channel_logos and line.startswith('#EXTINF'):
-                        # Check if line already has a tvg-logo attribute
-                        if 'tvg-logo="' in line:
-                            # Replace existing logo URL
-                            m3u_content[i] = re.sub(r'tvg-logo="[^"]*"', f'tvg-logo="{channel_logos[i]}"', line)
-                        else:
-                            # Add logo URL before the comma
-                            comma_pos = line.rfind(',')
-                            if comma_pos != -1:
-                                m3u_content[i] = line[:comma_pos] + f' tvg-logo="{channel_logos[i]}"' + line[comma_pos:]
-                
-                # Write the updated M3U file
-                with open(m3u_output_path, 'w', encoding='utf-8') as f:
+
+        # Write all selected outputs
+        output_msgs = []
+        if "txt" in output_paths:
+            try:
+                with open(output_paths["txt"], 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(output_lines))
+                self.log(f"Text output written to: {output_paths['txt']}")
+                output_msgs.append(f"Text output written to {os.path.basename(output_paths['txt'])}")
+            except Exception as e:
+                self.log(f"ERROR writing text output: {e}")
+                messagebox.showerror('Error', f'Failed to write text output: {e}')
+                return
+        if "html" in output_paths:
+            try:
+                self.write_html_output(output_paths["html"], structured_data, matches, total_channels)
+                self.log(f"HTML output written to: {output_paths['html']}")
+                output_msgs.append(f"HTML output written to {os.path.basename(output_paths['html'])}")
+            except Exception as e:
+                self.log(f"ERROR writing HTML output: {e}")
+                messagebox.showerror('Error', f'Failed to write HTML output: {e}')
+                return
+        if "m3u" in output_paths:
+            self.log(f"Creating updated M3U file with logo URLs")
+            for i, line in enumerate(m3u_content):
+                if i in channel_logos and line.startswith('#EXTINF'):
+                    if 'tvg-logo="' in line:
+                        m3u_content[i] = re.sub(r'tvg-logo="[^"]*"', f'tvg-logo="{channel_logos[i]}"', line)
+                    else:
+                        comma_pos = line.rfind(',')
+                        if comma_pos != -1:
+                            m3u_content[i] = line[:comma_pos] + f' tvg-logo="{channel_logos[i]}"' + line[comma_pos:]
+            try:
+                with open(output_paths["m3u"], 'w', encoding='utf-8') as f:
                     f.write('\n'.join(m3u_content))
-                
-                self.log(f"Updated M3U written to: {m3u_output_path}")
-                output_msg = f"Matched {matches} out of {total_channels} channels.\nUpdated M3U written to {os.path.basename(m3u_output_path)}"
-        else:
-            output_msg = f"Matched {matches} out of {total_channels} channels.\nOutput written to {os.path.basename(output_path)}"
+                self.log(f"Updated M3U written to: {output_paths['m3u']}")
+                output_msgs.append(f"Updated M3U written to {os.path.basename(output_paths['m3u'])}")
+            except Exception as e:
+                self.log(f"ERROR writing M3U output: {e}")
+                messagebox.showerror('Error', f'Failed to write M3U output: {e}')
+                return
+
+        output_msg = f"Matched {matches} out of {total_channels} channels.\n" + "\n".join(output_msgs)
 
         # Update final status
         match_percent = int(matches / total_channels * 100) if total_channels > 0 else 0
